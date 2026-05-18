@@ -50,3 +50,13 @@ const myChannelManager = new MyChannelManager();
 const engine = new ChannelEngine(myAssetManager, { channelManager: myChannelManager });
 engine.start();
 engine.listen(process.env.PORT || 8081);
+
+#https://vod2live.docs.eyevinn.technology/getting-started.html
+#mkdir my-channel-engine
+#cd my-channel-engine
+#npm init
+#npm install --save eyevinn-channel-engine
+#node server-intro.js
+#node node-Fasstt.js
+#http://localhost:8080/channels/myfirstchannel/master.m3u8
+#http://localhost:8080/channels/mysecondchannel/master.m3u8
