@@ -47,3 +47,116 @@ ffmpeg -i dot.mxf -c:v libx264 -b:v 1000k -maxrate 1200k -bufsize 2400k -vf "sca
 ffmpeg -i dot.mxf -c:v libx264 -b:v 2000k -maxrate 2300k -bufsize 4600k -vf "scale=1920:1080,format=yuv420p" -profile:v main -level:v 3.1 -r 25 -g 50 -keyint_min 48 -sc_threshold 0 -movflags +faststart -preset slow -crf 23 -pass 1 -map 0:v -map 0:a:0 -map 0:a:1 -c:a aac -b:a 128k -ac 2 -ar 48000 dot_1080p.mp4
 
 /home/ec2-user/bento4/Bento4-SDK-1-6-0-640.x86_64-unknown-linux/bin/mp4hls --force --verbose --hls-version=3 --segment-duration=4 --master-playlist-name=index.m3u8 bharat_180p.mp4 bharat_270p.mp4 bharat_360p.mp4 bharat_480p.mp4 bharat_720p.mp4 bharat_1080p.mp4 -o bharat/ -f
+
+
+ffmpeg -i outputencodedfile.mp4 -i source.mp4 \
+  -lavfi "[0:v]setpts=PTS-STARTPTS[dist]; \
+          [1:v]setpts=PTS-STARTPTS[ref]; \
+          [dist][ref]libvmaf=model_path=/usr/local/share/model/vmaf_v0.6.1.json:log_path=vmaf.json:log_fmt=json" \
+  -f null -
+
+
+
+  #!/bin/bash
+
+# =======================
+# Worker.sh (modified)
+# =======================
+
+BUCKET_NAME="kutting-germane"
+shift || true
+
+if [[ -z "$BUCKET_NAME" ]]; then
+  echo "ERROR: bucket name not provided. Usage: $0 <bucket-name> [file1 file2 ...]"
+  exit 1
+fi
+
+SRC_BUCKET="s3://${BUCKET_NAME}"
+DEST_BUCKET="s3://fast-vod-channels/${BUCKET_NAME}/hls/new"
+TEMP_DIR="/home/ec2-user/Kutting/tmp"
+
+process_file() {
+  local filepath="$1"
+  local filename=$(basename "$filepath")
+  local base_filename="${filename%.mp4}"
+
+  if aws s3 ls "$DEST_BUCKET/${base_filename}/index.m3u8" > /dev/null 2>&1; then
+    echo "\"$base_filename\" already transcoded and uploaded. Skipping..."
+    return
+  fi
+
+  echo "Transcoding \"$filename\"..."
+
+  ffmpeg -i "$filepath" -c:v h264_nvenc -b:v 2000k -maxrate 2300k -bufsize 4600k -vf scale_cuda=1920:1080 -profile:v main -level:v 4.1 -r 25 -g 50 -keyint_min 48 -forced-idr 1 -movflags faststart -preset p7 -c:a aac -b:a 128k -ac 2 -ar 48000 -max_muxing_queue_size 9999 "$TEMP_DIR/${base_filename}_1080p.mp4"
+  echo "Generated 1080p resolution for \"$filename\""
+
+  ffmpeg -i "$filepath" -c:v h264_nvenc -b:v 1000k -maxrate 1200k -bufsize 2400k -vf scale_cuda=1280:720 -profile:v main -level:v 3.1 -r 25 -g 50 -keyint_min 48 -forced-idr 1 -movflags faststart -preset p7 -c:a aac -b:a 128k -ac 2 -ar 48000 -max_muxing_queue_size 9999 "$TEMP_DIR/${base_filename}_720p.mp4"
+  echo "Generated 720p resolution for \"$filename\""
+
+  ffmpeg -i "$filepath" -c:v h264_nvenc -b:v 600k -maxrate 800k -bufsize 1600k -vf scale_cuda=854:480 -profile:v main -level:v 3.1 -r 25 -g 50 -keyint_min 48 -forced-idr 1 -movflags faststart -preset p7 -c:a aac -b:a 128k -ac 2 -ar 48000 -max_muxing_queue_size 9999 "$TEMP_DIR/${base_filename}_480p.mp4"
+  echo "Generated 480p resolution for \"$filename\""
+
+  ffmpeg -i "$filepath" -c:v h264_nvenc -b:v 400k -maxrate 600k -bufsize 1200k -vf scale_cuda=640:360 -profile:v main -level:v 3.1 -r 25 -g 50 -keyint_min 48 -forced-idr 1 -movflags faststart -preset p7 -c:a aac -b:a 64k -ac 2 -ar 48000 -max_muxing_queue_size 9999 "$TEMP_DIR/${base_filename}_360p.mp4"
+  echo "Generated 360p resolution for \"$filename\""
+
+  ffmpeg -i "$filepath" -c:v h264_nvenc -b:v 200k -maxrate 300k -bufsize 600k -vf scale_cuda=480:270 -profile:v main -level:v 2.1 -r 25 -g 50 -keyint_min 48 -forced-idr 1 -movflags faststart -preset p7 -c:a aac -b:a 64k -ac 2 -ar 48000 -max_muxing_queue_size 9999 "$TEMP_DIR/${base_filename}_270p.mp4"
+  echo "Generated 270p resolution for \"$filename\""
+
+  ffmpeg -i "$filepath" -c:v h264_nvenc -b:v 90k -maxrate 100k -bufsize 200k -vf scale_cuda=320:180 -profile:v main -level:v 2.1 -r 25 -g 50 -keyint_min 48 -forced-idr 1 -movflags faststart -preset p7 -c:a aac -b:a 64k -ac 2 -ar 48000 -max_muxing_queue_size 9999 "$TEMP_DIR/${base_filename}_180p.mp4"
+  echo "Generated 180p resolution for \"$filepath\""
+
+  echo "Generating HLS segments for \"$filename\"..."
+  /home/ec2-user/bento4/Bento4-SDK-1-6-0-640.x86_64-unknown-linux/bin/mp4hls --force --verbose --hls-version=3 --segment-duration=4 --master-playlist-name=index.m3u8 \
+    "$TEMP_DIR/${base_filename}_180p.mp4" "$TEMP_DIR/${base_filename}_270p.mp4" \
+    "$TEMP_DIR/${base_filename}_360p.mp4" "$TEMP_DIR/${base_filename}_480p.mp4" \
+    "$TEMP_DIR/${base_filename}_720p.mp4" "$TEMP_DIR/${base_filename}_1080p.mp4" \
+    -o "$TEMP_DIR/${base_filename}/" -f
+
+  echo "Uploading HLS to S3..."
+  aws s3 cp "$TEMP_DIR/${base_filename}/" "$DEST_BUCKET/${base_filename}/" --recursive
+
+  rm -rf "$TEMP_DIR/${base_filename}"*
+  echo "Cleaned up temporary files for \"$filename\""
+}
+
+split_and_process_file() {
+  local file="$1"
+  file=$(echo "$file" | sed 's/[ \t]*$//')
+
+  filename=$(basename "$file" | tr ' ' '_')
+  filename=$(echo "$filename" | tr -cd 'A-Za-z0-9_.\-%&,()=!\?\ ')
+  base_filename="${filename%.mp4}"
+
+  if aws s3 ls "$DEST_BUCKET/${base_filename}/index.m3u8" > /dev/null 2>&1; then
+    echo "\"$base_filename\" already uploaded. Skipping..."
+    return
+  fi
+
+  echo "Downloading \"$filename\"..."
+  aws s3 cp "$SRC_BUCKET/$file" "$TEMP_DIR/$filename"
+
+  duration=$(ffmpeg -i "$TEMP_DIR/$filename" 2>&1 | grep "Duration" | awk '{print $2}' | tr -d , | awk -F: '{ print ($1 * 3600) + ($2 * 60) + $3 }')
+  [[ -z "$duration" ]] && echo "Error getting duration of $filename" && return
+
+  duration_int=$(printf "%.0f" "$duration")
+
+  if (( duration_int > 1800 )); then
+    echo "Splitting \"$filename\"..."
+    chunk_index=1
+    start_time=0
+
+    while (( start_time < duration_int )); do
+      chunk="${TEMP_DIR}/${base_filename}_part${chunk_index}.mp4"
+      ffmpeg -i "$TEMP_DIR/$filename" -ss "$start_time" -t 1800 -c copy "$chunk"
+      process_file "$chunk"
+      chunk_index=$((chunk_index + 1))
+      start_time=$((start_time + 1800))
+    done
+  else
+    process_file "$TEMP_DIR/$filename"
+  fi
+}
+
+for file in "$@"; do
+  split_and_process_file "$file"
+done
